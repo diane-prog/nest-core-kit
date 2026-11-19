@@ -1,98 +1,251 @@
-<p align="center">
-  <a href="http://nestjs.com/" target="blank"><img src="https://nestjs.com/img/logo-small.svg" width="120" alt="Nest Logo" /></a>
-</p>
+# Nest Core Kit
 
-[circleci-image]: https://img.shields.io/circleci/build/github/nestjs/nest/master?token=abc123def456
-[circleci-url]: https://circleci.com/gh/nestjs/nest
+> Boîte à outils transversale réutilisable pour vos APIs **NestJS 11** et **TypeORM**, inspirée et alignée sur l'architecture robuste du projet **Finanx**.
 
-  <p align="center">A progressive <a href="http://nodejs.org" target="_blank">Node.js</a> framework for building efficient and scalable server-side applications.</p>
-    <p align="center">
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/v/@nestjs/core.svg" alt="NPM Version" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/l/@nestjs/core.svg" alt="Package License" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/dm/@nestjs/common.svg" alt="NPM Downloads" /></a>
-<a href="https://circleci.com/gh/nestjs/nest" target="_blank"><img src="https://img.shields.io/circleci/build/github/nestjs/nest/master" alt="CircleCI" /></a>
-<a href="https://discord.gg/G7Qnnhy" target="_blank"><img src="https://img.shields.io/badge/discord-online-brightgreen.svg" alt="Discord"/></a>
-<a href="https://opencollective.com/nest#backer" target="_blank"><img src="https://opencollective.com/nest/backers/badge.svg" alt="Backers on Open Collective" /></a>
-<a href="https://opencollective.com/nest#sponsor" target="_blank"><img src="https://opencollective.com/nest/sponsors/badge.svg" alt="Sponsors on Open Collective" /></a>
-  <a href="https://paypal.me/kamilmysliwiec" target="_blank"><img src="https://img.shields.io/badge/Donate-PayPal-ff3f59.svg" alt="Donate us"/></a>
-    <a href="https://opencollective.com/nest#sponsor"  target="_blank"><img src="https://img.shields.io/badge/Support%20us-Open%20Collective-41B883.svg" alt="Support us"></a>
-  <a href="https://twitter.com/nestframework" target="_blank"><img src="https://img.shields.io/twitter/follow/nestframework.svg?style=social&label=Follow" alt="Follow us on Twitter"></a>
-</p>
-  <!--[![Backers on Open Collective](https://opencollective.com/nest/backers/badge.svg)](https://opencollective.com/nest#backer)
-  [![Sponsors on Open Collective](https://opencollective.com/nest/sponsors/badge.svg)](https://opencollective.com/nest#sponsor)-->
+Fournit un ensemble de briques prêtes à l'emploi pour standardiser vos microservices et applications backend :
+- **Persistance & CRUD** : Entité de base (`UUID`, timestamps, soft delete) et Repository abstrait avec pagination intégrée.
+- **Gestion des erreurs & TypeORM** : Filtre d'exception global avec conversion automatique des erreurs SQL/TypeORM en codes HTTP propres (400, 404 au lieu de 500).
+- **Formatage des réponses** : Intercepteur miroir `{ success, statusCode, data, timestamp }` avec support d'exclusion brute via `@BypassTransform()`.
+- **Validation avancée** : Validateur de correspondance de mot de passe `@IsPasswordMatch()`.
+- **Documentation Swagger automatique** : Décorateur `@StandardPaginationQueries()` pour la pagination OpenAPI en une ligne.
+- **Observabilité** : Intercepteur de logs mesurant le temps de traitement de chaque requête.
+- **Sécurité & JWT** : Guard d'authentification "sécurisé par défaut", stratégie Passport JWT, gestion des rôles insensible à la casse (`RolesGuard`, `@Roles`, `@RequireRoles`), et décorateur `@CurrentUser()`.
 
-## Description
+---
 
-[Nest](https://github.com/nestjs/nest) framework TypeScript starter repository.
+## 📦 Installation
 
-## Project setup
+Dans votre nouveau projet NestJS :
 
 ```bash
-$ pnpm install
+# Via npm registry (si publié) :
+pnpm add nest-core-kit
+
+# Ou directement depuis votre dépôt Git :
+pnpm add git+https://github.com/votre-compte/nest-core-kit.git
 ```
 
-## Compile and run the project
+Dépendances requises dans le projet hôte (`peerDependencies`) :
+```bash
+pnpm add @nestjs/passport passport-jwt typeorm class-validator class-transformer @nestjs/swagger
+```
+
+---
+
+## 🚀 Utilisation
+
+### 1. Activer les filtres et intercepteurs dans `main.ts`
+
+```typescript
+import { NestFactory, Reflector } from '@nestjs/core';
+import { ValidationPipe } from '@nestjs/common';
+import { 
+  HttpExceptionFilter, 
+  LoggingInterceptor, 
+  ResponseTransformInterceptor 
+} from 'nest-core-kit';
+import { AppModule } from './app.module';
+
+async function bootstrap() {
+  const app = await NestFactory.create(AppModule);
+  const reflector = app.get(Reflector);
+
+  // Validation automatique des DTOs (whitelist + transformation)
+  app.useGlobalPipes(new ValidationPipe({ transform: true, whitelist: true }));
+
+  // Formatage uniforme de toutes les erreurs (HttpException, TypeORM, erreurs 500)
+  app.useGlobalFilters(new HttpExceptionFilter());
+
+  // Logs d'exécution + formatage uniforme { success: true, data: ... }
+  app.useGlobalInterceptors(
+    new LoggingInterceptor(),
+    new ResponseTransformInterceptor(reflector),
+  );
+
+  await app.listen(3000);
+}
+bootstrap();
+```
+
+---
+
+### 2. Base de données & TypeORM
+
+#### Entité
+Héritez de `AbstractEntity` pour bénéficier d'un `id` (UUID), `createdAt`, `updatedAt` et `deletedAt` (soft delete) :
+
+```typescript
+import { Entity, Column } from 'typeorm';
+import { AbstractEntity } from 'nest-core-kit';
+
+@Entity('products')
+export class Product extends AbstractEntity {
+  @Column()
+  name: string;
+
+  @Column('decimal')
+  price: number;
+}
+```
+
+#### Repository avec Pagination et CRUD automatique
+Héritez de `AbstractRepository<T>` :
+
+```typescript
+import { Injectable, Logger } from '@nestjs/common';
+import { InjectRepository } from '@nestjs/typeorm';
+import { Repository } from 'typeorm';
+import { AbstractRepository, PaginateDto, PaginatedResult } from 'nest-core-kit';
+import { Product } from './product.entity';
+
+@Injectable()
+export class ProductsRepository extends AbstractRepository<Product> {
+  protected readonly logger = new Logger(ProductsRepository.name);
+
+  constructor(
+    @InjectRepository(Product)
+    repo: Repository<Product>,
+  ) {
+    super(repo);
+  }
+}
+```
+
+Méthodes disponibles immédiatement dans votre repository :
+- `create(data)`
+- `findOne(where, options)` (lève une `NotFoundException` 404 automatique)
+- `findOneOrNull(where, options)`
+- `findAll(where)`
+- `paginate(paginateDto, where)` (renvoie `{ data, meta: { total, page, limit, totalPages } }`)
+- `update(where, partial)`
+- `softDelete(where)` et `hardDelete(where)`
+
+---
+
+### 3. Contrôleur avec Pagination Swagger & Contournement de réponse
+
+```typescript
+import { Controller, Get, Query } from '@nestjs/common';
+import { 
+  StandardPaginationQueries, 
+  PaginateDto, 
+  BypassTransform 
+} from 'nest-core-kit';
+
+@Controller('products')
+export class ProductsController {
+  // Documente automatiquement page, limit, sort dans Swagger
+  @Get()
+  @StandardPaginationQueries()
+  findAll(@Query() paginateDto: PaginateDto) {
+    return this.productsRepo.paginate(paginateDto);
+  }
+
+  // Renvoie le fichier brut sans l'enveloppe { success: true, data: ... }
+  @Get('export/csv')
+  @BypassTransform()
+  exportCsv() {
+    return 'id,name,price\n1,Demo,10';
+  }
+}
+```
+
+---
+
+### 4. Validation de mot de passe (`@IsPasswordMatch`)
+
+Dans vos DTOs d'inscription ou de réinitialisation de mot de passe :
+
+```typescript
+import { IsString, MinLength } from 'class-validator';
+import { IsPasswordMatch } from 'nest-core-kit';
+
+export class RegisterDto {
+  @IsString()
+  @MinLength(8)
+  password: string;
+
+  @IsPasswordMatch('password', { 
+    message: 'Les mots de passe ne correspondent pas.' 
+  })
+  confirmPassword: string;
+}
+```
+
+---
+
+### 5. Authentification, Rôles & Sécurité
+
+#### Configuration globale dans `app.module.ts`
+
+```typescript
+import { Module } from '@nestjs/common';
+import { APP_GUARD } from '@nestjs/core';
+import { PassportModule } from '@nestjs/passport';
+import { JwtStrategy, JwtAuthGuard, RolesGuard } from 'nest-core-kit';
+
+@Module({
+  imports: [PassportModule.register({ defaultStrategy: 'jwt' })],
+  providers: [
+    JwtStrategy,
+    {
+      provide: APP_GUARD,
+      useClass: JwtAuthGuard, // Toutes les routes protégées par défaut
+    },
+    {
+      provide: APP_GUARD,
+      useClass: RolesGuard,   // Vérification automatique des rôles (@Roles / @RequireRoles)
+    },
+  ],
+})
+export class AppModule {}
+```
+
+#### Utilisation dans vos contrôleurs
+
+```typescript
+import { Controller, Get, Post } from '@nestjs/common';
+import { Public, CurrentUser, Roles, RequireRoles, JwtPayload } from 'nest-core-kit';
+
+@Controller('users')
+export class UsersController {
+  // Route ouverte à tous (sans token JWT)
+  @Public()
+  @Post('login')
+  login() {
+    return { token: 'jwt-token-here' };
+  }
+
+  // Récupération directe de l'utilisateur connecté
+  @Get('me')
+  getProfile(@CurrentUser() user: JwtPayload) {
+    return user;
+  }
+
+  // Restreint aux administrateurs (supporte user.role.label, user.role, user.roles)
+  @Roles('admin') // ou @RequireRoles('admin')
+  @Get('admin-panel')
+  getAdminPanel() {
+    return { message: 'Bienvenue dans le panneau admin' };
+  }
+}
+```
+
+---
+
+## 🛠️ Développement & Tests
 
 ```bash
-# development
-$ pnpm run start
+# Compiler la bibliothèque (génère dist/)
+pnpm run build
 
-# watch mode
-$ pnpm run start:dev
+# Lancer la suite de tests unitaires (23 tests)
+pnpm run test
 
-# production mode
-$ pnpm run start:prod
+# Lancer le serveur de démo / playground local
+pnpm run start:dev
 ```
 
-## Run tests
+## 📄 Licence
 
-```bash
-# unit tests
-$ pnpm run test
-
-# e2e tests
-$ pnpm run test:e2e
-
-# test coverage
-$ pnpm run test:cov
-```
-
-## Deployment
-
-When you're ready to deploy your NestJS application to production, there are some key steps you can take to ensure it runs as efficiently as possible. Check out the [deployment documentation](https://docs.nestjs.com/deployment) for more information.
-
-If you are looking for a cloud-based platform to deploy your NestJS application, check out [Mau](https://mau.nestjs.com), our official platform for deploying NestJS applications on AWS. Mau makes deployment straightforward and fast, requiring just a few simple steps:
-
-```bash
-$ pnpm install -g @nestjs/mau
-$ mau deploy
-```
-
-With Mau, you can deploy your application in just a few clicks, allowing you to focus on building features rather than managing infrastructure.
-
-## Resources
-
-Check out a few resources that may come in handy when working with NestJS:
-
-- Visit the [NestJS Documentation](https://docs.nestjs.com) to learn more about the framework.
-- For questions and support, please visit our [Discord channel](https://discord.gg/G7Qnnhy).
-- To dive deeper and get more hands-on experience, check out our official video [courses](https://courses.nestjs.com/).
-- Deploy your application to AWS with the help of [NestJS Mau](https://mau.nestjs.com) in just a few clicks.
-- Visualize your application graph and interact with the NestJS application in real-time using [NestJS Devtools](https://devtools.nestjs.com).
-- Need help with your project (part-time to full-time)? Check out our official [enterprise support](https://enterprise.nestjs.com).
-- To stay in the loop and get updates, follow us on [X](https://x.com/nestframework) and [LinkedIn](https://linkedin.com/company/nestjs).
-- Looking for a job, or have a job to offer? Check out our official [Jobs board](https://jobs.nestjs.com).
-
-## Support
-
-Nest is an MIT-licensed open source project. It can grow thanks to the sponsors and support by the amazing backers. If you'd like to join them, please [read more here](https://docs.nestjs.com/support).
-
-## Stay in touch
-
-- Author - [Kamil Myśliwiec](https://twitter.com/kammysliwiec)
-- Website - [https://nestjs.com](https://nestjs.com/)
-- Twitter - [@nestframework](https://twitter.com/nestframework)
-
-## License
-
-Nest is [MIT licensed](https://github.com/nestjs/nest/blob/master/LICENSE).
+MIT

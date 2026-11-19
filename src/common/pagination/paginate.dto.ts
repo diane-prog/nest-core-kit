@@ -1,6 +1,7 @@
+import { applyDecorators } from '@nestjs/common';
 import { Type } from 'class-transformer';
 import { IsInt, IsOptional, IsString, Max, Min } from 'class-validator';
-import { ApiPropertyOptional } from '@nestjs/swagger';
+import { ApiPropertyOptional, ApiQuery } from '@nestjs/swagger';
 
 export class PaginateDto {
   @ApiPropertyOptional({ default: 1, minimum: 1 })
@@ -37,3 +38,43 @@ export interface PaginatedResult<T> {
     totalPages: number;
   };
 }
+
+export interface PaginationQueryOptions {
+  defaultPage?: number;
+  defaultLimit?: number;
+}
+
+/**
+ * Décorateur Swagger combiné : documente automatiquement dans la spécification OpenAPI
+ * les paramètres de query standard pour la pagination (page, limit, sort).
+ *
+ * Exemple :
+ *   @Get()
+ *   @StandardPaginationQueries()
+ *   findAll(@Query() paginateDto: PaginateDto) { ... }
+ */
+export const StandardPaginationQueries = (options?: PaginationQueryOptions) => {
+  return applyDecorators(
+    ApiQuery({
+      name: 'page',
+      required: false,
+      type: Number,
+      example: options?.defaultPage ?? 1,
+      description: 'Numéro de page',
+    }),
+    ApiQuery({
+      name: 'limit',
+      required: false,
+      type: Number,
+      example: options?.defaultLimit ?? 10,
+      description: "Nombre d'éléments par page",
+    }),
+    ApiQuery({
+      name: 'sort',
+      required: false,
+      type: String,
+      description: 'Champ et direction de tri (ex: createdAt:DESC)',
+      example: 'createdAt:DESC',
+    }),
+  );
+};

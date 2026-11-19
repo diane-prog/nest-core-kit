@@ -12,3 +12,9 @@ export const ROLES_KEY = 'roles';
  *   getReports() { ... }
  */
 export const Roles = (...roles: string[]) => SetMetadata(ROLES_KEY, roles);
+
+/**
+ * Alias de @Roles pour compatibilité avec les conventions du projet Finanx.
+ */
+export const RequireRoles = Roles;
+

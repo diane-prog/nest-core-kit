@@ -7,10 +7,20 @@ import {
   Logger,
 } from '@nestjs/common';
 import { Request, Response } from 'express';
+import {
+  QueryFailedError,
+  EntityNotFoundError,
+  EntityMetadataNotFoundError,
+  EntityPropertyNotFoundError,
+  CannotCreateEntityIdMapError,
+  DataTypeNotSupportedError,
+  TypeORMError,
+} from 'typeorm';
 
 /**
- * Filtre global : uniformise toutes les réponses d'erreur de l'API,
- * qu'elles viennent d'une HttpException NestJS ou d'une erreur inattendue.
+ * Filtre global : uniformise toutes les réponses d'erreur de l'API.
+ * Gère les HttpException de NestJS, les erreurs TypeORM (requêtes, contraintes, entités non trouvées),
+ * ainsi que les erreurs inattendues de façon robuste (aligné sur l'architecture Finanx).
  *
  * Enregistrement global recommandé (dans main.ts) :
  *   app.useGlobalFilters(new HttpExceptionFilter());
@@ -24,20 +34,26 @@ export class HttpExceptionFilter implements ExceptionFilter {
     const response = ctx.getResponse<Response>();
     const request = ctx.getRequest<Request>();
 
-    const status =
-      exception instanceof HttpException
-        ? exception.getStatus()
-        : HttpStatus.INTERNAL_SERVER_ERROR;
+    let status = HttpStatus.INTERNAL_SERVER_ERROR;
+    let message: string | object = 'Erreur interne du serveur.';
 
-    const exceptionResponse =
-      exception instanceof HttpException ? exception.getResponse() : null;
-
-    const message =
-      exceptionResponse && typeof exceptionResponse === 'object' && 'message' in exceptionResponse
-        ? (exceptionResponse as any).message
-        : exception instanceof Error
-          ? exception.message
-          : 'Erreur interne du serveur.';
+    if (exception instanceof HttpException) {
+      status = exception.getStatus();
+      const exceptionResponse = exception.getResponse();
+      message =
+        typeof exceptionResponse === 'object' &&
+        exceptionResponse !== null &&
+        'message' in exceptionResponse
+          ? (exceptionResponse as any).message
+          : exception.message;
+    } else if (exception instanceof TypeORMError) {
+      status = this.mapTypeORMErrorToHttpStatus(exception);
+      // Récupère les détails de violation (ex: unicité Postgres/MySQL) si disponible
+      const detail = (exception as any).detail;
+      message = detail || exception.message;
+    } else if (exception instanceof Error) {
+      message = exception.message;
+    }
 
     if (status >= 500) {
       this.logger.error(
@@ -45,7 +61,9 @@ export class HttpExceptionFilter implements ExceptionFilter {
         exception instanceof Error ? exception.stack : undefined,
       );
     } else {
-      this.logger.warn(`${request.method} ${request.url} - ${status}: ${JSON.stringify(message)}`);
+      this.logger.warn(
+        `${request.method} ${request.url} - ${status}: ${JSON.stringify(message)}`,
+      );
     }
 
     response.status(status).json({
@@ -55,5 +73,23 @@ export class HttpExceptionFilter implements ExceptionFilter {
       timestamp: new Date().toISOString(),
       message,
     });
+  }
+
+  /**
+   * Mappe les erreurs internes TypeORM vers des statuts HTTP appropriés (400, 404, etc.)
+   */
+  private mapTypeORMErrorToHttpStatus(error: TypeORMError): HttpStatus {
+    switch (true) {
+      case error instanceof QueryFailedError:
+      case error instanceof CannotCreateEntityIdMapError:
+      case error instanceof DataTypeNotSupportedError:
+        return HttpStatus.BAD_REQUEST;
+      case error instanceof EntityNotFoundError:
+      case error instanceof EntityMetadataNotFoundError:
+      case error instanceof EntityPropertyNotFoundError:
+        return HttpStatus.NOT_FOUND;
+      default:
+        return HttpStatus.INTERNAL_SERVER_ERROR;
+    }
   }
 }
